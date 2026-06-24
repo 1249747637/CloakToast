@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
@@ -49,7 +49,7 @@ def update_profile(profile_id: str, body: ProfileUpdate, db: Session = Depends(g
         raise HTTPException(404, "Profile not found")
     for k, v in body.model_dump().items():
         setattr(p, k, v)
-    p.updated_at = datetime.utcnow()
+    p.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(p)
     return _enrich(p)

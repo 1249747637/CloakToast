@@ -1,7 +1,7 @@
 import { apiFetch } from "./client";
 import type { URLTask, URLTaskDetail } from "../types";
 
-export const getTasks = () => apiFetch<URLTask[]>("/tasks");
+export const getTasks = () => apiFetch<URLTaskDetail[]>("/tasks");
 export const getTask = (id: string) => apiFetch<URLTaskDetail>(`/tasks/${id}`);
 export const createTask = (data: Partial<URLTask>) =>
   apiFetch<URLTask>("/tasks", { method: "POST", body: JSON.stringify(data) });

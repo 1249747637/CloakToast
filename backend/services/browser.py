@@ -3,7 +3,7 @@ import base64
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -73,7 +73,7 @@ async def launch_profile(profile_dict: dict, task_id: Optional[str], urls: list[
 
     running_instances[profile_id] = {
         "process": process,
-        "started_at": datetime.utcnow(),
+        "started_at": datetime.now(timezone.utc),
         "task_id": task_id,
     }
 

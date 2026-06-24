@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
@@ -47,9 +47,20 @@ def _build_detail(task: URLTask, db: Session) -> dict:
     return {**base, "profiles": profiles_data, "total_profiles": len(tps), "done_count": done}
 
 
-@router.get("", response_model=list[URLTaskResponse])
+@router.get("", response_model=list[URLTaskDetail])
 def list_tasks(db: Session = Depends(get_db)):
-    return db.query(URLTask).order_by(URLTask.created_at.desc()).all()
+    tasks = db.query(URLTask).order_by(URLTask.created_at.desc()).all()
+    result = []
+    for t in tasks:
+        tps = db.query(TaskProfile).filter(TaskProfile.task_id == t.id).all()
+        done = sum(1 for tp in tps if tp.status == "done")
+        base = URLTaskResponse.model_validate(t).model_dump()
+        # Serialize datetime fields
+        for k, v in base.items():
+            if isinstance(v, datetime):
+                base[k] = v.isoformat()
+        result.append({**base, "profiles": [], "total_profiles": len(tps), "done_count": done})
+    return result
 
 
 @router.post("", response_model=URLTaskResponse)
@@ -61,7 +72,7 @@ def create_task(body: URLTaskCreate, db: Session = Depends(get_db)):
     return t
 
 
-@router.get("/{task_id}")
+@router.get("/{task_id}", response_model=URLTaskDetail)
 def get_task(task_id: str, db: Session = Depends(get_db)):
     t = db.get(URLTask, task_id)
     if not t:
@@ -140,6 +151,6 @@ def update_status(
         raise HTTPException(404, "Not found")
     tp.status = body.status
     tp.notes = body.notes
-    tp.updated_at = datetime.utcnow()
+    tp.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True}

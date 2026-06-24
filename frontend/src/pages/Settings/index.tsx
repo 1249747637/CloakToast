@@ -44,7 +44,9 @@ export default function SettingsPage() {
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             const text = line.slice(6);
-            setUpdateLog((prev) => [...prev, text]);
+            if (text !== "[DONE]") {
+              setUpdateLog((prev) => [...prev, text]);
+            }
             setTimeout(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight), 0);
           }
         }

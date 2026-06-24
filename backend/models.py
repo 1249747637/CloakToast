@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, Integer, Float, Text, DateTime
 from sqlalchemy.types import TypeDecorator
 from .database import Base
@@ -56,8 +56,8 @@ class Profile(Base):
     user_data_dir = Column(String, default="")
     cdp_port = Column(Integer, nullable=True)
     extra_args = Column(JSONList, default=list)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class URLTask(Base):
@@ -67,7 +67,7 @@ class URLTask(Base):
     name = Column(String, nullable=False)
     urls = Column(JSONList, default=list)
     notes = Column(Text, default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class TaskProfile(Base):
@@ -78,4 +78,4 @@ class TaskProfile(Base):
     profile_id = Column(String, nullable=False)
     status = Column(String, default="pending")  # pending/done/skipped
     notes = Column(Text, default="")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

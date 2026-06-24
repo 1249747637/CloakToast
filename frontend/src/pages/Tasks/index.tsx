@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { Table, Button, Popconfirm, Typography, Modal, Form, Input, message } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
-import type { URLTask } from "../../types";
+import type { URLTaskDetail } from "../../types";
 import { getTasks, createTask, deleteTask } from "../../api/tasks";
 
 export default function TasksPage() {
-  const [tasks, setTasks] = useState<URLTask[]>([]);
+  const [tasks, setTasks] = useState<URLTaskDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -45,11 +45,16 @@ export default function TasksPage() {
     {
       title: "任务名称",
       dataIndex: "name",
-      render: (name: string, r: URLTask) => (
+      render: (name: string, r: URLTaskDetail) => (
         <Button type="link" onClick={() => navigate(`/tasks/${r.id}`)}>{name}</Button>
       ),
     },
     { title: "URL 数量", dataIndex: "urls", render: (urls: string[]) => urls.length },
+    { title: "Profile 总数", dataIndex: "total_profiles" },
+    {
+      title: "完成进度",
+      render: (_: unknown, r: URLTaskDetail) => `${r.done_count} / ${r.total_profiles}`,
+    },
     {
       title: "创建时间",
       dataIndex: "created_at",
@@ -57,7 +62,7 @@ export default function TasksPage() {
     },
     {
       title: "操作",
-      render: (_: unknown, r: URLTask) => (
+      render: (_: unknown, r: URLTaskDetail) => (
         <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
           <Button type="link" danger>删除</Button>
         </Popconfirm>
