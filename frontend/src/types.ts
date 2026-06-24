@@ -36,6 +36,8 @@ export interface Profile {
   user_data_dir: string;
   cdp_port: number | null;
   extra_args: string[];
+  block_video: boolean;
+  block_image_max_kb: number | null;
   created_at: string;
   updated_at: string;
   is_running: boolean;

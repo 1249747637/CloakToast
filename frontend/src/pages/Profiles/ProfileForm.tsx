@@ -51,6 +51,7 @@ export default function ProfileForm({ open, profile, onClose }: Props) {
           human_preset: "default",
           fp_noise_enabled: true,
           headless: false,
+          block_video: false,
         });
       }
     }
@@ -130,6 +131,29 @@ export default function ProfileForm({ open, profile, onClose }: Props) {
       </Form.Item>
       <Form.Item label="语言" name="locale">
         <Select options={LOCALES} />
+      </Form.Item>
+      <Divider>省流设置</Divider>
+      <Form.Item
+        label="屏蔽视频"
+        name="block_video"
+        valuePropName="checked"
+        tooltip="同时屏蔽 <video>/<audio> 和 HLS/DASH (.m3u8/.mpd/.ts) 流量。适合只需要浏览页面、不需要看视频的代理场景。"
+        extra="拦截页面内的视频/音频与流媒体请求，显著降低带宽占用。"
+      >
+        <Switch checkedChildren="拦截" unCheckedChildren="放行" />
+      </Form.Item>
+      <Form.Item
+        label="图片大小上限 (KB)"
+        name="block_image_max_kb"
+        extra="留空=不限制；0=屏蔽所有图片；填正数=超过该 KB 的图片直接 abort（HEAD 先探）"
+      >
+        <InputNumber
+          style={{ width: "100%" }}
+          min={0}
+          max={102400}
+          step={50}
+          placeholder="留空=不限制"
+        />
       </Form.Item>
       <Form.Item label="无头模式" name="headless" valuePropName="checked">
         <Switch />
