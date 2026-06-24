@@ -1,6 +1,9 @@
 import asyncio
+import os
+import signal
 import subprocess
 import sys
+import threading
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from ..config import get_config, save_config, get_license_key
@@ -48,6 +51,16 @@ async def update_cloakbrowser():
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/shutdown")
+def shutdown():
+    def _kill():
+        import time
+        time.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+    threading.Thread(target=_kill, daemon=True).start()
+    return {"ok": True}
 
 
 @router.put("/license")

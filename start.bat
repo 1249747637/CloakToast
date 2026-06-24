@@ -14,5 +14,5 @@ if not exist "frontend\dist\index.html" (
 )
 
 echo [3/3] 启动 CloakToast...
-echo 访问 http://localhost:8765
+start "" /b cmd /c "timeout /t 3 /nobreak > nul && start http://localhost:8765"
 python -m backend.main

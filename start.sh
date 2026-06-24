@@ -12,5 +12,5 @@ if [ ! -f "frontend/dist/index.html" ]; then
 fi
 
 echo "[3/3] 启动 CloakToast..."
-echo "访问 http://localhost:8765"
+(sleep 3 && (open http://localhost:8765 2>/dev/null || xdg-open http://localhost:8765 2>/dev/null || true)) &
 python -m backend.main

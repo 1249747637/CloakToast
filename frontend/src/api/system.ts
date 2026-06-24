@@ -7,3 +7,6 @@ export const saveLicense = (license_key: string) =>
     method: "PUT",
     body: JSON.stringify({ license_key }),
   });
+
+export const shutdown = () =>
+  apiFetch<{ ok: boolean }>("/system/shutdown", { method: "POST" });

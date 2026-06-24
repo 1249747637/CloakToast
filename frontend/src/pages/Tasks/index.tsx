@@ -25,7 +25,7 @@ export default function TasksPage() {
   async function handleCreate() {
     try {
       const values = await form.validateFields();
-      const urls = (values.urls as string).split("\n").map((s: string) => s.trim()).filter(Boolean);
+      const urls = ((values.urls as string) || "").split("\n").map((s: string) => s.trim()).filter(Boolean);
       await createTask({ name: values.name, urls, notes: values.notes || "" });
       message.success("创建成功");
       setModalOpen(false);
