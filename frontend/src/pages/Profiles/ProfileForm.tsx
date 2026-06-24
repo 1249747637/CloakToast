@@ -59,7 +59,7 @@ export default function ProfileForm({ open, profile, onClose }: Props) {
   async function onSubmit() {
     try {
       const values = await form.validateFields();
-      const extra_args = (values.extra_args as string)
+      const extra_args = ((values.extra_args as string) || "")
         .split("\n")
         .map((s: string) => s.trim())
         .filter(Boolean);
