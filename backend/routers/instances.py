@@ -13,6 +13,12 @@ def list_instances():
     return list(browser.get_running_instances().values())
 
 
+@router.get("/recent_exits")
+def list_recent_exits():
+    """最近退出的 worker — 用于前端展示崩溃日志（returncode != 0）。"""
+    return browser.get_recent_exits()
+
+
 @router.post("/launch")
 async def launch(body: LaunchRequest, db: Session = Depends(get_db)):
     p = db.get(Profile, body.profile_id)

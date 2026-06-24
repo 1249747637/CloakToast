@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -6,7 +7,20 @@ from .database import Base, engine
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="CloakToast")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # 启动阶段无事可做
+    yield
+    # 关停阶段：尝试干净地关掉所有正在跑的浏览器，避免留 orphan Chromium 卡住 user_data_dir
+    from .services.browser import stop_all
+    try:
+        await stop_all()
+    except Exception:
+        pass
+
+
+app = FastAPI(title="CloakToast", lifespan=lifespan)
 
 from .routers import profiles, instances, tasks, system
 

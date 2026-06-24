@@ -1,15 +1,27 @@
 """
 独立子进程脚本，由 browser.py 以 subprocess 启动。
 用法: python browser_worker.py <base64_json_payload>
+
+退出码：
+    0 — 浏览器被用户关闭（正常退出）
+    1 — payload 解析失败
+    2 — cloakbrowser/Playwright 启动失败
+    3 — 运行时其他异常
 """
 import sys
 import json
 import base64
+import threading
+import traceback
+from pathlib import Path
+from datetime import datetime, timezone
 
 
 def build_fingerprint_args(profile: dict) -> list[str]:
     args = []
-    if profile.get("fingerprint_seed"):
+    # fingerprint_seed = 0 是合法值（32 位整数 seed 之一），不能用 truthiness。
+    # 其他整数字段如 hardware_concurrency / device_memory / screen_* 0 是无意义的，保留 truthiness。
+    if profile.get("fingerprint_seed") is not None:
         args.append(f"--fingerprint={profile['fingerprint_seed']}")
     if not profile.get("fp_noise_enabled", True):
         args.append("--fingerprint-noise=false")
@@ -35,7 +47,7 @@ def build_fingerprint_args(profile: dict) -> list[str]:
     lng = profile.get("fp_location_lng")
     if lat is not None and lng is not None:
         args.append(f"--fingerprint-location={lat},{lng}")
-    if profile.get("fp_storage_quota"):
+    if profile.get("fp_storage_quota") is not None:
         args.append(f"--fingerprint-storage-quota={profile['fp_storage_quota']}")
     if profile.get("fp_fonts_dir"):
         args.append(f"--fingerprint-fonts-dir={profile['fp_fonts_dir']}")
@@ -48,6 +60,93 @@ def build_fingerprint_args(profile: dict) -> list[str]:
     return args + (profile.get("extra_args") or [])
 
 
+VIDEO_EXTENSIONS = (
+    ".mp4", ".webm", ".mov", ".m4s", ".m4v", ".m4a",
+    ".ts", ".mp3", ".aac", ".flv", ".mkv", ".avi",
+)
+VIDEO_MANIFEST_EXTENSIONS = (".m3u8", ".mpd")
+
+
+def _is_video_url(url: str) -> bool:
+    """识别视频/音频流 URL。media resource_type 已覆盖 <video>/<audio>，
+    但 HLS/DASH 的 m3u8/mpd/ts 通常走 xhr/fetch，需要按扩展名补抓。"""
+    path = url.split("?", 1)[0].split("#", 1)[0].lower()
+    if path.endswith(VIDEO_EXTENSIONS):
+        return True
+    if path.endswith(VIDEO_MANIFEST_EXTENSIONS):
+        return True
+    return False
+
+
+def install_resource_blocker(
+    context,
+    block_video: bool,
+    block_image_max_kb: int | None,
+    on_log=None,
+) -> bool:
+    """在 BrowserContext 上挂载一个 route handler，按规则 abort 请求。
+    返回是否真的安装了 handler — 没有任何规则时不安装，避免 per-request 开销。
+
+    block_video: 屏蔽 <video>/<audio> + HLS/DASH 流。
+    block_image_max_kb:
+        None — 不限制
+        0    — 屏蔽所有图片（HEAD 都不发）
+        N>0  — 先 HEAD 探 Content-Length，>N KB 时 abort
+    """
+    if not block_video and block_image_max_kb is None:
+        return False
+
+    def _log(msg):
+        if on_log:
+            try:
+                on_log(msg)
+            except Exception:
+                pass
+
+    def handler(route, request):
+        try:
+            rt = request.resource_type
+            url = request.url
+
+            if block_video:
+                if rt == "media" or _is_video_url(url):
+                    _log(f"BLOCK video [{rt}] {url[:120]}")
+                    route.abort()
+                    return
+
+            if rt == "image" and block_image_max_kb is not None:
+                if block_image_max_kb == 0:
+                    _log(f"BLOCK image (all) {url[:120]}")
+                    route.abort()
+                    return
+                # HEAD 探一下大小 — HEAD 不被支持时直接放行
+                try:
+                    resp = route.fetch(method="HEAD")
+                    cl = resp.headers.get("content-length")
+                    if cl and int(cl) > block_image_max_kb * 1024:
+                        _log(f"BLOCK image ({int(cl)//1024}KB > {block_image_max_kb}KB) {url[:120]}")
+                        route.abort()
+                        return
+                except Exception:
+                    # HEAD 失败 —— 服务器不支持 / 网络错误，保守放行
+                    pass
+
+            route.continue_()
+        except Exception as e:
+            # 任何 route handler 异常都不能让浏览器卡死 — 尽力放行
+            try:
+                route.continue_()
+            except Exception:
+                pass
+
+    try:
+        context.route("**/*", handler)
+        return True
+    except Exception as e:
+        _log(f"failed to install resource blocker: {e!r}")
+        return False
+
+
 def build_proxy(profile: dict) -> str | None:
     if profile.get("proxy_type", "none") == "none" or not profile.get("proxy_host"):
         return None
@@ -57,31 +156,142 @@ def build_proxy(profile: dict) -> str | None:
     return f"{profile['proxy_type']}://{creds}{profile['proxy_host']}:{profile['proxy_port']}"
 
 
-def main():
-    payload = json.loads(base64.b64decode(sys.argv[1]))
-    profile = payload["profile"]
-    urls = payload.get("urls", [])
+def _log(udd: str | None, msg: str) -> None:
+    """把 worker 日志追加到 profile 自身的 log 文件，便于排查闪退。"""
+    try:
+        if udd:
+            log_path = Path(udd) / "_cloaktoast_worker.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now(timezone.utc).isoformat()}] {msg}\n")
+    except Exception:
+        pass
+    print(msg, file=sys.stderr, flush=True)
 
-    from cloakbrowser import launch_persistent_context
 
-    context = launch_persistent_context(
-        user_data_dir=profile["udd"],
-        proxy=build_proxy(profile),
-        timezone=profile.get("timezone") or None,
-        locale=profile.get("locale") or None,
-        humanize=profile.get("humanize", True),
-        human_preset=profile.get("human_preset", "default"),
-        headless=profile.get("headless", False),
-        user_agent=profile.get("user_agent") or None,
-        args=build_fingerprint_args(profile),
-    )
+def main() -> int:
+    udd = None
+    try:
+        payload = json.loads(base64.b64decode(sys.argv[1]))
+    except Exception:
+        print("FATAL: 无法解析 payload", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return 1
 
-    for url in urls:
-        page = context.new_page()
-        page.goto(url)
+    profile = payload.get("profile") or {}
+    urls = payload.get("urls") or []
+    license_key = payload.get("license_key")
+    udd = profile.get("udd")
 
-    context.wait_for_close()
+    _log(udd, f"worker started, profile={profile.get('id')!r}, urls={len(urls)}, license={'set' if license_key else 'none'}")
+
+    try:
+        from cloakbrowser import launch_persistent_context
+    except Exception:
+        _log(udd, "FATAL: import cloakbrowser failed\n" + traceback.format_exc())
+        return 2
+
+    try:
+        context = launch_persistent_context(
+            user_data_dir=profile["udd"],
+            proxy=build_proxy(profile),
+            timezone=profile.get("timezone") or None,
+            locale=profile.get("locale") or None,
+            humanize=profile.get("humanize", True),
+            human_preset=profile.get("human_preset", "default"),
+            headless=profile.get("headless", False),
+            user_agent=profile.get("user_agent") or None,
+            args=build_fingerprint_args(profile),
+            extension_paths=profile.get("extension_paths") or None,
+            license_key=license_key,
+        )
+    except Exception:
+        _log(udd, "FATAL: launch_persistent_context failed\n" + traceback.format_exc())
+        return 2
+
+    _log(udd, "context launched OK")
+
+    # 节约代理流量：根据 profile 配置安装资源拦截 handler。
+    block_video = bool(profile.get("block_video"))
+    block_image_max_kb = profile.get("block_image_max_kb")
+    if install_resource_blocker(
+        context,
+        block_video=block_video,
+        block_image_max_kb=block_image_max_kb,
+        on_log=lambda m: _log(udd, m),
+    ):
+        _log(udd, f"resource blocker on: video={block_video} image_max_kb={block_image_max_kb}")
+
+    # 关键：在打开任何 URL 之前先订阅 close 事件。
+    # 否则若用户在 goto 期间关闭浏览器，close 事件已触发但还没有 listener，
+    # pyee 不会重放历史事件 — 后面再调 wait_for_event("close") 会永远挂死
+    # （Playwright 的 expect_event 对 Close 事件本身刻意跳过 reject_on_event 分支）。
+    closed_event = threading.Event()
+
+    def _on_close(_ctx):
+        _log(udd, "context.close event fired")
+        closed_event.set()
+
+    try:
+        context.on("close", _on_close)
+    except Exception:
+        _log(udd, "WARN: failed to register close listener\n" + traceback.format_exc())
+
+    try:
+        for url in urls:
+            if closed_event.is_set() or context.is_closed():
+                _log(udd, "context closed during goto loop, breaking early")
+                break
+            try:
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                # 单个 URL 失败不应导致整个浏览器闪退 — 仅记录后继续
+                _log(udd, f"goto {url!r} failed: {e!r}")
+
+        # 没有任何 URL 时新开一个空白页，避免无页面导致 Chromium 启动后立刻退出
+        if not context.is_closed() and not context.pages:
+            try:
+                context.new_page()
+            except Exception as e:
+                _log(udd, f"new_page (blank) failed: {e!r}")
+
+        # 走 wait loop 之前再检查一次：如果 goto 期间已关闭，直接走完即可
+        if closed_event.is_set() or context.is_closed():
+            _log(udd, "already closed before wait loop, exiting")
+            return 0
+
+        _log(udd, "entering wait loop")
+
+        # timeout=0 表示永不超时（Playwright 源码：reject_on_timeout 在 timeout==0 时直接 return）。
+        # 不传 timeout 会用默认 30s，到时间抛 TimeoutError → 进程退出 → Chromium 跟着关闭。
+        # 但即便 timeout=0，如果 close 事件已经在我们调到这里之前触发，pyee 不会重放，
+        # wait_for_event 会永远挂死 — 因此上面用 threading.Event 提前订阅，并在这里 fall back 到 closed_event.wait()。
+        if closed_event.is_set():
+            return 0
+        try:
+            context.wait_for_event("close", timeout=0)
+        except Exception as e:
+            _log(udd, f"wait_for_event raised, falling back to threading.Event: {e!r}")
+            closed_event.wait()
+
+        _log(udd, "context closed by user, exiting")
+        return 0
+    except KeyboardInterrupt:
+        _log(udd, "interrupted, closing context")
+        try:
+            context.close()
+        except Exception:
+            pass
+        return 0
+    except Exception:
+        _log(udd, "FATAL: runtime error in wait loop\n" + traceback.format_exc())
+        try:
+            context.close()
+        except Exception:
+            pass
+        return 3
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
