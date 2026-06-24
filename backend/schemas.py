@@ -40,6 +40,9 @@ class ProfileBase(BaseModel):
     user_data_dir: str = ""
     cdp_port: Optional[int] = None
     extra_args: list[str] = []
+    # 流量节约
+    block_video: bool = False
+    block_image_max_kb: Optional[int] = None  # None=不限制 0=全屏蔽 N=>N KB 时 abort
 
 
 class ProfileCreate(ProfileBase):

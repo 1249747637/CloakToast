@@ -56,6 +56,11 @@ class Profile(Base):
     user_data_dir = Column(String, default="")
     cdp_port = Column(Integer, nullable=True)
     extra_args = Column(JSONList, default=list)
+    # 流量节约：通过 Playwright route 拦截
+    block_video = Column(Boolean, default=False)
+    # 单张图片大于 N KB 就 abort（HEAD 先探 Content-Length）。
+    # None = 不限制；0 = 屏蔽所有图片；>0 = 按 KB 阈值过滤。
+    block_image_max_kb = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
