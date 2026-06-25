@@ -1,4 +1,5 @@
 import uuid
+import random
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -27,7 +28,10 @@ def list_profiles(db: Session = Depends(get_db)):
 
 @router.post("", response_model=ProfileResponse)
 def create_profile(body: ProfileCreate, db: Session = Depends(get_db)):
-    p = Profile(id=str(uuid.uuid4()), **body.model_dump())
+    data = body.model_dump()
+    if data.get("fingerprint_seed") is None:
+        data["fingerprint_seed"] = random.randint(0, 2**32 - 1)
+    p = Profile(id=str(uuid.uuid4()), **data)
     db.add(p)
     db.commit()
     db.refresh(p)
@@ -74,6 +78,7 @@ def duplicate_profile(profile_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Profile not found")
     data = ProfileCreate.model_validate(p, from_attributes=True).model_dump()
     data["name"] = f"{p.name} (副本)"
+    data["fingerprint_seed"] = random.randint(0, 2**32 - 1)
     new_p = Profile(id=str(uuid.uuid4()), **data)
     db.add(new_p)
     db.commit()
