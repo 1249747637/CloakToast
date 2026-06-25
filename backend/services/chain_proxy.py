@@ -273,8 +273,11 @@ def start_chain_proxy(relay_url: str, target_url: str) -> int:
             _registry[port] = (server, loop)
             port_holder.append(port)
             ready.set()
-            async with server:
-                await server.serve_forever()
+            try:
+                async with server:
+                    await server.serve_forever()
+            except asyncio.CancelledError:
+                pass
 
         loop.run_until_complete(_serve())
 

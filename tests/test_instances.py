@@ -436,3 +436,83 @@ def test_build_proxy():
         "proxy_user": "alice",
         "proxy_pass": "secret",
     }) == "socks5://alice:secret@1.2.3.4:1080"
+
+
+# ---------------------------------------------------------------------------
+# WebRTC 模式测试
+# ---------------------------------------------------------------------------
+
+def test_webrtc_mode_custom_with_ip():
+    from backend.services.browser_worker import build_fingerprint_args
+    args = build_fingerprint_args({"fp_webrtc_mode": "custom", "fp_webrtc_ip": "1.2.3.4"})
+    assert "--fingerprint-webrtc-ip=1.2.3.4" in args
+
+
+def test_webrtc_mode_custom_without_ip():
+    """mode=custom 但没填 IP，不应输出 flag（避免传空值给 cloakbrowser）。"""
+    from backend.services.browser_worker import build_fingerprint_args
+    args = build_fingerprint_args({"fp_webrtc_mode": "custom", "fp_webrtc_ip": ""})
+    assert not any("webrtc" in a for a in args)
+
+
+def test_webrtc_mode_mask():
+    from backend.services.browser_worker import build_fingerprint_args
+    args = build_fingerprint_args({"fp_webrtc_mode": "mask"})
+    assert "--fingerprint-webrtc-ip=10.0.0.1" in args
+
+
+def test_webrtc_mode_block_no_flag():
+    """block 模式通过 add_init_script 注入 JS，不传 cloakbrowser flag。"""
+    from backend.services.browser_worker import build_fingerprint_args
+    args = build_fingerprint_args({"fp_webrtc_mode": "block"})
+    assert not any("webrtc" in a for a in args)
+
+
+def test_webrtc_legacy_compat_ip_without_mode():
+    """旧数据：有 fp_webrtc_ip 但无 fp_webrtc_mode → 自动视为 custom。"""
+    from backend.services.browser_worker import build_fingerprint_args
+    args = build_fingerprint_args({"fp_webrtc_mode": "", "fp_webrtc_ip": "5.6.7.8"})
+    assert "--fingerprint-webrtc-ip=5.6.7.8" in args
+
+
+def test_webrtc_default_no_intervention():
+    """mode 为空 + 无 IP → 不输出任何 webrtc flag。"""
+    from backend.services.browser_worker import build_fingerprint_args
+    args = build_fingerprint_args({"fp_webrtc_mode": "", "fp_webrtc_ip": ""})
+    assert not any("webrtc" in a for a in args)
+
+
+# ---------------------------------------------------------------------------
+# 中继代理 URL 构建
+# ---------------------------------------------------------------------------
+
+def test_build_relay_url_none_type():
+    from backend.services.browser_worker import _build_relay_url
+    assert _build_relay_url({"relay_proxy_type": "none"}) is None
+
+
+def test_build_relay_url_no_host():
+    from backend.services.browser_worker import _build_relay_url
+    assert _build_relay_url({"relay_proxy_type": "socks5", "relay_proxy_host": ""}) is None
+
+
+def test_build_relay_url_basic():
+    from backend.services.browser_worker import _build_relay_url
+    url = _build_relay_url({
+        "relay_proxy_type": "socks5",
+        "relay_proxy_host": "127.0.0.1",
+        "relay_proxy_port": 7897,
+    })
+    assert url == "socks5://127.0.0.1:7897"
+
+
+def test_build_relay_url_with_credentials():
+    from backend.services.browser_worker import _build_relay_url
+    url = _build_relay_url({
+        "relay_proxy_type": "http",
+        "relay_proxy_host": "proxy.example.com",
+        "relay_proxy_port": 8080,
+        "relay_proxy_user": "alice",
+        "relay_proxy_pass": "s3cr3t",
+    })
+    assert url == "http://alice:s3cr3t@proxy.example.com:8080"

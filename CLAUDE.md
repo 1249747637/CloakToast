@@ -22,7 +22,7 @@
 CloakToast/
 ├── backend/
 │   ├── main.py              # FastAPI app + lifespan shutdown hook
-│   ├── database.py          # SQLite, SQLAlchemy engine, get_db
+│   ├── database.py          # SQLite, SQLAlchemy engine, get_db + migrate_add_columns
 │   ├── models.py            # Profile, URLTask, TaskProfile ORM 模型
 │   ├── schemas.py           # Pydantic schemas (ProfileBase/Create/Update/Response…)
 │   ├── config.py            # data/config.json 读写, license key
@@ -33,7 +33,8 @@ CloakToast/
 │   │   └── system.py        # /info, /update (SSE), /license, /shutdown
 │   └── services/
 │       ├── browser.py       # 进程管理: launch_profile / stop_profile / watcher task
-│       └── browser_worker.py # 独立子进程: launch_persistent_context + 资源拦截
+│       ├── browser_worker.py # 独立子进程: launch_persistent_context + 资源拦截
+│       └── chain_proxy.py   # 纯 asyncio SOCKS5 链式代理 (relay → target)
 ├── frontend/
 │   ├── src/
 │   │   ├── main.tsx         # 入口, ConfigProvider (Toasted Amber 主题), AntdApp
@@ -50,7 +51,8 @@ CloakToast/
 ├── tests/
 │   ├── conftest.py          # SQLite 内存 DB + TestClient fixture
 │   ├── test_profiles.py
-│   ├── test_instances.py    # mock + 真实进程逻辑测试 (13 项)
+│   ├── test_instances.py    # mock + 真实进程逻辑测试 (WebRTC/relay/资源拦截)
+│   ├── test_chain_proxy.py  # SOCKS5 协议握手 + 服务器启停测试
 │   ├── test_tasks.py
 │   ├── test_system.py
 │   └── test_worker_e2e.py   # 真实 Chromium E2E (需 CLOAKTOAST_E2E=1)
@@ -83,6 +85,9 @@ cd frontend && npm run dev   # → http://localhost:5173, API 代理到 :8765
 # 测试
 python -m pytest tests/ -v                        # 单元+集成 (快, ~2s)
 CLOAKTOAST_E2E=1 python -m pytest tests/ -v      # 全量含真实 Chromium (~55s)
+
+# GeoIP 功能（可选）
+pip install "cloakbrowser[geoip]"
 ```
 
 ---
@@ -109,7 +114,13 @@ CLOAKTOAST_E2E=1 python -m pytest tests/ -v      # 全量含真实 Chromium (~55
 | extra_args | JSONList | 额外 Chromium 启动参数 |
 | **block_video** | Boolean | 拦截视频/HLS/DASH 流量，省代理流量 |
 | **block_image_max_kb** | Integer? | `None`=不限 / `0`=全屏蔽 / `N`=超 N KB abort |
+| **fp_webrtc_mode** | String | `""` 不干预 / `"custom"` 自定义IP / `"mask"` 覆盖为10.0.0.1 / `"block"` 禁用RTCPeerConnection |
+| **geoip** | Boolean | `True`=cloakbrowser 通过代理出口IP自动推断时区/语言/地理位置（需 `cloakbrowser[geoip]`） |
+| **relay_proxy_type** | String | `"none"` / `"http"` / `"socks5"` — 链式代理第一跳（如 mihomo） |
+| **relay_proxy_host/port/user/pass** | String/Int | 中继代理凭证 |
 | created_at / updated_at | DateTime | 自动管理 |
+
+> **数据库迁移**: 新列由 `database.py:migrate_add_columns()` 幂等追加，在 `main.py` 的 `Base.metadata.create_all()` 之后调用，不阻断启动。
 
 ### URLTask / TaskProfile
 
@@ -125,23 +136,30 @@ uvicorn (FastAPI)
  └── browser.py: running_instances dict (in-memory)
       └── asyncio.create_subprocess_exec(python browser_worker.py <base64_payload>)
            ↓ stdout/stderr → data/profiles/<id>/_cloaktoast_subprocess.log
-           └── cloakbrowser.launch_persistent_context()
-                └── playwright node driver → Chromium
+           └── [可选] chain_proxy.py: start_chain_proxy(relay_url, target_url) → :PORT
+                └── cloakbrowser.launch_persistent_context(proxy="socks5://127.0.0.1:PORT")
+                     └── playwright node driver → Chromium
 ```
+
+**链式代理路径**: Browser → chain_proxy(127.0.0.1:PORT) → relay(mihomo:7897) → target(cliproxy) → Internet
 
 **关键设计决策：**
 
-1. **`wait_for_event("close", timeout=0)`** — 必须 `timeout=0`，否则 Playwright 默认 30s 超时会强杀浏览器。`timeout=0` 对应 Playwright 源码 `reject_on_timeout: if timeout == 0: return`（永不超时）。
+1. **`wait_for_event("close", timeout=0)`** — 必须 `timeout=0`，否则 Playwright 默认 30s 超时会强杀浏览器。
 
-2. **close listener 必须在 goto loop 之前订阅** — pyee 不重放历史事件，若 goto 期间用户关浏览器，close 已触发，`wait_for_event` 后注册永远挂死。因此用 `threading.Event` + `context.on("close", ...)` 在 goto 之前订阅，goto 内用 `closed_event.is_set()` 提前退出。
+2. **close listener 必须在 goto loop 之前订阅** — pyee 不重放历史事件，若 goto 期间用户关浏览器，close 已触发，`wait_for_event` 后注册永远挂死。因此用 `threading.Event` + `context.on("close", ...)` 在 goto 之前订阅。
 
-3. **per-profile asyncio.Lock** — 防 TOCTOU：并发两个 launch 请求同一 profile 会撞 Chromium SingletonLock。锁在 `launch_profile` 和 `stop_profile` 内持有。
+3. **per-profile asyncio.Lock** — 防 TOCTOU：并发两个 launch 请求同一 profile 会撞 Chromium SingletonLock。
 
-4. **watcher task** — `asyncio.create_task(_watch(...))` 在 launch 后挂起，一旦 worker 退出立即从 `running_instances` 移走并写 `recent_exits`，避免状态延迟（前端 5s 轮询无需等到下次才感知到浏览器关闭）。
+4. **watcher task** — 一旦 worker 退出立即从 `running_instances` 移走并写 `recent_exits`，前端 5s 轮询无需等到下次才感知到浏览器关闭。
 
-5. **startup probe** — `launch_profile` 在 spawn 后等待 `STARTUP_PROBE_SECONDS=1.5`；若 worker 在此窗口内退出（配置错误/许可失败/参数无效），立刻抛 `ValueError` 给前端，显示错误而非"启动成功"。
+5. **startup probe** — `STARTUP_PROBE_SECONDS=1.5` 窗口内 worker 退出则立刻向前端抛 `ValueError`（400），不假装启动成功。
 
-6. **资源拦截** — `install_resource_blocker(context, block_video, block_image_max_kb)` 在 goto 之前调用，通过 Playwright `context.route("**/*", handler)` 实现。`block_video=False` 且 `block_image_max_kb=None` 时不安装 handler，零开销。
+6. **资源拦截** — `install_resource_blocker(context, block_video, block_image_max_kb)` 通过 `context.route("**/*", handler)` 实现。两个参数均为默认值时不安装 handler，零开销。
+
+7. **WebRTC block 模式** — 通过 `context.add_init_script(BLOCK_WEBRTC_JS)` 注入 JS，在页面执行前覆盖 `window.RTCPeerConnection` 为 `undefined`，不走 cloakbrowser flag。
+
+8. **chain_proxy CancelledError** — `stop_chain_proxy` 调用 `server.close()` 会取消 `serve_forever()`，`_serve()` 内必须 `except asyncio.CancelledError: pass` 否则 daemon thread 以异常退出触发 pytest warning。
 
 ---
 
@@ -183,16 +201,27 @@ uvicorn (FastAPI)
     │   ├── Header: 名称 + StatusBadge Tag
     │   ├── Body: 代理/Locale·TZ/省流 tag/辅助 tag (grid)
     │   └── Footer: 主按钮(启动/停止) + 圆形 icon 次按钮(编辑/复制/删除)
-    └── ProfileForm.tsx       Drawer 600px, Tabs(常用/指纹/高级)
-        ├── 常用: 名称/颜色/备注/代理/时区语言/省流(block_video+block_image_max_kb)/无头/Humanize
-        ├── 指纹: seed/噪声/平台/屏幕/CPU/GPU/WebRTC/位置/字体...
-        └── 高级: UA/Brand/扩展路径/UDD/CDP/extra_args
+    └── ProfileForm.tsx       Drawer 520px, Tabs(常用/指纹/高级)
+        ├── 常用: 名称/颜色/备注
+        │         代理(类型+凭证) → Collapse"中继代理"(relay_proxy_*)
+        │         GeoIP Switch (disabled when 无代理或中继激活)
+        │         时区/语言 / 省流(block_video+block_image_max_kb) / 无头/Humanize
+        ├── 指纹: seed/噪声/平台 / 分辨率预设按钮+Width/Height Select / 任务栏 Select
+        │         WebGL厂商/渲染器 / WebRTC模式 Select (custom→IP Input) / 位置/存储/字体
+        └── 高级: UA / 品牌 Select→版本 Select(联动) / 平台版本 Select/Input(联动)
+                  扩展路径 / UDD / CDP / extra_args
 
 /tasks → Tasks/index.tsx
 /tasks/:id → Tasks/TaskDetail.tsx
 
 /settings → Settings/index.tsx
 ```
+
+**ProfileForm 关键 UI 规则**：
+- **分辨率预设**: 5 个快填按钮（1920×1080 等）+ Width/Height 各一个 `Select showSearch`，选项固定为常见值，留空=真实显示器
+- **品牌/版本联动**: `fp_brand` 改变时 `form.setFieldValue("fp_brand_version", undefined)` 清空版本；版本 Select 用 `shouldUpdate` 动态生成 options，`disabled={!brand}`
+- **系统版本联动**: windows→["10.0.0","15.0.0"]，macos→["15.0"…"12.0"]，其他平台→降级为 Input
+- **GeoIP Switch**: `disabled={!hasProxy || hasRelay}`；中继激活时 tooltip 说明原因
 
 **主题**: Toasted Amber (`#D97706`) + Dark Roast sider (`#1F1A17`) + 暖羊皮纸背景 (`#FAF7F2`)，在 `frontend/src/main.tsx` 的 `ctTheme` ConfigProvider 中定义。
 
@@ -202,7 +231,8 @@ uvicorn (FastAPI)
 
 | 层级 | 文件 | 说明 |
 |------|------|------|
-| 单元 | `test_instances.py` | mock subprocess，覆盖 launch/stop/watcher/TOCTOU/资源拦截逻辑 |
+| 单元 | `test_instances.py` | mock subprocess，覆盖 launch/stop/watcher/TOCTOU/资源拦截/WebRTC模式/relay URL |
+| 单元 | `test_chain_proxy.py` | SOCKS5协议握手(_parse/_socks5_accept/_socks5_reply) + 服务器启停集成 |
 | 集成 | `test_profiles.py` / `test_tasks.py` / `test_system.py` | 真实 SQLite in-memory DB + TestClient |
 | E2E | `test_worker_e2e.py` | 真实 Chromium，需 `CLOAKTOAST_E2E=1`，~50s |
 
@@ -222,12 +252,13 @@ E2E 测试覆盖：
 - **running_instances 跨重启丢失**: backend 重启后 in-memory dict 清空，但 Chromium 仍在运行，持有 SingletonLock，导致重启后无法再次 launch 同一 profile（需手动关闭浏览器或删除 SingletonLock 文件）。长期应持久化 `{profile_id: pid}` 到 SQLite 并在 startup 用 psutil 检测。
 - **前端无搜索/过滤**: Profile 管理页无搜索、无运行状态过滤。
 - **前端 chunk 体积**: vite build 输出单 chunk 1.2MB（gzip 377KB），超出 500KB 警告，应做代码分割。
+- **chain_proxy 单跳限制**: 当前只支持 relay→target 两跳；多跳链式需重构 `_handle` 递归调用。
 
 ---
 
 ## 开发注意事项
 
-1. **新增 Profile 字段**: 需同步修改 `models.py`、`schemas.py`、`types.ts`、`ProfileForm.tsx`（表单默认值）、`ProfileCard.tsx`（卡片展示按需）、`browser_worker.py`（若影响 worker 行为）。
+1. **新增 Profile 字段**: 需同步修改 `models.py`、`schemas.py`、`types.ts`、`ProfileForm.tsx`（表单默认值）、`ProfileCard.tsx`（卡片展示按需）、`browser_worker.py`（若影响 worker 行为）、`database.py:migrate_add_columns()`（旧库补列）。
 
 2. **fingerprint_seed = 0 合法**: 用 `is not None` 判断，不能用 truthiness。其他整数指纹字段 0 无意义可用 truthiness。
 
@@ -238,3 +269,7 @@ E2E 测试覆盖：
 5. **antd ConfigProvider 主题**: 组件内用 `theme.useToken()` 取颜色/间距 token，**不要硬编码** hex 颜色（包括 `color: 'red'`），保留暗色模式扩展能力。
 
 6. **ProfileCard 不用 `actions` prop**: antd Card.actions 等宽列 + text-danger hover 会贴卡片圆角，用自渲染 footer `<div>` 替代。
+
+7. **WebRTC 旧数据兼容**: `fp_webrtc_mode` 为空但 `fp_webrtc_ip` 有值时，`build_fingerprint_args` 自动视为 `"custom"` 模式（向前兼容）。ProfileForm 的 `useEffect` 也做了相同推断，让编辑框显示正确状态。
+
+8. **chain_proxy import 双路径**: `browser_worker.py` 以 `python browser_worker.py` 方式启动时 Python 把脚本目录加入 `sys.path`，用 `from chain_proxy import ...`；在测试/模块上下文中用 `from backend.services.chain_proxy import ...`。两者用 try/except ImportError 兼容。
