@@ -23,6 +23,10 @@ def migrate_add_columns(eng=None) -> None:
     """为已有数据库补充 profiles 表的新列，幂等，遇到异常不阻断启动。"""
     _engine = eng or engine
     new_cols = [
+        # 第一批：省流字段（4363f4a）
+        ("block_video",       "INTEGER DEFAULT 0"),
+        ("block_image_max_kb","INTEGER"),
+        # 第二批：WebRTC 模式 / GeoIP / 中继代理（本次会话）
         ("fp_webrtc_mode",   "TEXT    DEFAULT ''"),
         ("geoip",            "INTEGER DEFAULT 0"),
         ("relay_proxy_type", "TEXT    DEFAULT 'none'"),
