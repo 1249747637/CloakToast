@@ -54,12 +54,16 @@ async def update_cloakbrowser():
 
 
 @router.post("/shutdown")
-def shutdown():
-    def _kill():
-        import time
-        time.sleep(0.5)
-        os.kill(os.getpid(), signal.SIGTERM)
-    threading.Thread(target=_kill, daemon=True).start()
+async def shutdown():
+    async def _do():
+        await asyncio.sleep(0.4)   # 让 HTTP 响应先发出去
+        from ..services.browser import stop_all
+        try:
+            await stop_all()
+        except Exception:
+            pass
+        os._exit(0)                # 强制退出，Windows 下最可靠
+    asyncio.create_task(_do())
     return {"ok": True}
 
 
