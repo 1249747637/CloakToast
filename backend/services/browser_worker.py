@@ -17,6 +17,25 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 
+BLOCK_WEBRTC_JS = """
+Object.defineProperty(window, 'RTCPeerConnection',
+  {get: () => undefined, configurable: false});
+Object.defineProperty(window, 'webkitRTCPeerConnection',
+  {get: () => undefined, configurable: false});
+"""
+
+
+def _build_relay_url(profile: dict) -> str | None:
+    """构建中继代理 URL（relay_proxy_* 字段）。"""
+    rtype = profile.get("relay_proxy_type", "none")
+    if rtype == "none" or not profile.get("relay_proxy_host"):
+        return None
+    creds = ""
+    if profile.get("relay_proxy_user"):
+        creds = f"{profile['relay_proxy_user']}:{profile.get('relay_proxy_pass', '')}@"
+    return f"{rtype}://{creds}{profile['relay_proxy_host']}:{profile['relay_proxy_port']}"
+
+
 def build_fingerprint_args(profile: dict) -> list[str]:
     args = []
     # fingerprint_seed = 0 是合法值（32 位整数 seed 之一），不能用 truthiness。
@@ -41,8 +60,15 @@ def build_fingerprint_args(profile: dict) -> list[str]:
         args.append(f"--fingerprint-gpu-vendor={profile['fp_gpu_vendor']}")
     if profile.get("fp_gpu_renderer"):
         args.append(f"--fingerprint-gpu-renderer={profile['fp_gpu_renderer']}")
-    if profile.get("fp_webrtc_ip"):
+    # WebRTC 模式（兼容旧数据：有 fp_webrtc_ip 但无 fp_webrtc_mode → 视为 custom）
+    _webrtc_mode = profile.get("fp_webrtc_mode") or ""
+    if not _webrtc_mode and profile.get("fp_webrtc_ip"):
+        _webrtc_mode = "custom"
+    if _webrtc_mode == "custom" and profile.get("fp_webrtc_ip"):
         args.append(f"--fingerprint-webrtc-ip={profile['fp_webrtc_ip']}")
+    elif _webrtc_mode == "mask":
+        args.append("--fingerprint-webrtc-ip=10.0.0.1")
+    # "block" 由 add_init_script 处理；"" 不传 flag
     lat = profile.get("fp_location_lat")
     lng = profile.get("fp_location_lng")
     if lat is not None and lng is not None:
@@ -191,10 +217,27 @@ def main() -> int:
         _log(udd, "FATAL: import cloakbrowser failed\n" + traceback.format_exc())
         return 2
 
+    # 链式代理：relay_proxy_* 字段有效时启动本地 SOCKS5 中转，再通过它连 cliproxy
+    chain_port = None
+    relay_url = _build_relay_url(profile)
+    target_url = build_proxy(profile)
+    if relay_url and target_url:
+        try:
+            try:
+                from backend.services.chain_proxy import start_chain_proxy
+            except ImportError:
+                from chain_proxy import start_chain_proxy  # standalone script mode
+            chain_port = start_chain_proxy(relay_url, target_url)
+            _log(udd, f"chain proxy started on 127.0.0.1:{chain_port}")
+        except Exception as e:
+            _log(udd, f"WARN: chain proxy failed to start: {e!r} — using direct proxy")
+
+    proxy_for_browser = f"socks5://127.0.0.1:{chain_port}" if chain_port else build_proxy(profile)
+
     try:
         context = launch_persistent_context(
             user_data_dir=profile["udd"],
-            proxy=build_proxy(profile),
+            proxy=proxy_for_browser,
             timezone=profile.get("timezone") or None,
             locale=profile.get("locale") or None,
             humanize=profile.get("humanize", True),
@@ -204,6 +247,7 @@ def main() -> int:
             args=build_fingerprint_args(profile),
             extension_paths=profile.get("extension_paths") or None,
             license_key=license_key,
+            geoip=bool(profile.get("geoip")),
         )
     except Exception:
         _log(udd, "FATAL: launch_persistent_context failed\n" + traceback.format_exc())
@@ -221,6 +265,13 @@ def main() -> int:
         on_log=lambda m: _log(udd, m),
     ):
         _log(udd, f"resource blocker on: video={block_video} image_max_kb={block_image_max_kb}")
+
+    if profile.get("fp_webrtc_mode") == "block":
+        try:
+            context.add_init_script(BLOCK_WEBRTC_JS)
+            _log(udd, "WebRTC blocked via init_script")
+        except Exception as e:
+            _log(udd, f"WARN: failed to inject WebRTC block script: {e!r}")
 
     # 关键：在打开任何 URL 之前先订阅 close 事件。
     # 否则若用户在 goto 期间关闭浏览器，close 事件已触发但还没有 listener，
