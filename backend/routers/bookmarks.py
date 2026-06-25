@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Bookmark
-from ..schemas import BookmarkCreate, BookmarkUpdate, BookmarkResponse
+from ..schemas import BookmarkCreate, BookmarkUpdate, BookmarkResponse, BookmarkReorderItem
 
 router = APIRouter()
 
@@ -19,6 +19,16 @@ def create_bookmark(body: BookmarkCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(bm)
     return bm
+
+
+@router.post("/reorder")
+def reorder_bookmarks(body: list[BookmarkReorderItem], db: Session = Depends(get_db)):
+    for item in body:
+        bm = db.get(Bookmark, item.id)
+        if bm:
+            bm.sort_order = item.sort_order
+    db.commit()
+    return {"ok": True}
 
 
 @router.put("/{bookmark_id}", response_model=BookmarkResponse)

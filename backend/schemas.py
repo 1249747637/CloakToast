@@ -95,6 +95,11 @@ class BookmarkResponse(BookmarkBase):
     model_config = {"from_attributes": True}
 
 
+class BookmarkReorderItem(BaseModel):
+    id: str
+    sort_order: int
+
+
 class LaunchRequest(BaseModel):
     profile_id: str
 
