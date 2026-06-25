@@ -38,6 +38,13 @@ export interface Profile {
   extra_args: string[];
   block_video: boolean;
   block_image_max_kb: number | null;
+  fp_webrtc_mode: string;
+  geoip: boolean;
+  relay_proxy_type: "none" | "http" | "socks5";
+  relay_proxy_host: string;
+  relay_proxy_port: number | null;
+  relay_proxy_user: string;
+  relay_proxy_pass: string;
   created_at: string;
   updated_at: string;
   is_running: boolean;

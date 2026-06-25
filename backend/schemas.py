@@ -43,6 +43,16 @@ class ProfileBase(BaseModel):
     # 流量节约
     block_video: bool = False
     block_image_max_kb: Optional[int] = None  # None=不限制 0=全屏蔽 N=>N KB 时 abort
+    # WebRTC 模式
+    fp_webrtc_mode: str = ""
+    # GeoIP 跟随代理 IP
+    geoip: bool = False
+    # 中继代理（链式代理）
+    relay_proxy_type: str = "none"
+    relay_proxy_host: str = ""
+    relay_proxy_port: Optional[int] = None
+    relay_proxy_user: str = ""
+    relay_proxy_pass: str = ""
 
 
 class ProfileCreate(ProfileBase):

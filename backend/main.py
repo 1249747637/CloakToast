@@ -3,9 +3,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
-from .database import Base, engine
+from .database import Base, engine, migrate_add_columns
 
 Base.metadata.create_all(bind=engine)
+migrate_add_columns()
 
 
 @asynccontextmanager

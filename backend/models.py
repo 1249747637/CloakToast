@@ -61,6 +61,16 @@ class Profile(Base):
     # 单张图片大于 N KB 就 abort（HEAD 先探 Content-Length）。
     # None = 不限制；0 = 屏蔽所有图片；>0 = 按 KB 阈值过滤。
     block_image_max_kb = Column(Integer, nullable=True)
+    # WebRTC 模式："" = 不干预 / "custom" = 自定义IP / "mask" = 覆盖为私有IP / "block" = 禁用
+    fp_webrtc_mode = Column(String, default="")
+    # GeoIP：通过代理出口 IP 自动推断时区/语言/位置（需 cloakbrowser[geoip]）
+    geoip = Column(Boolean, default=False)
+    # 中继代理（链式代理第一跳，用于需要先经过本地代理才能访问主代理的场景）
+    relay_proxy_type = Column(String, default="none")  # none / http / socks5
+    relay_proxy_host = Column(String, default="")
+    relay_proxy_port = Column(Integer, nullable=True)
+    relay_proxy_user = Column(String, default="")
+    relay_proxy_pass = Column(String, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
