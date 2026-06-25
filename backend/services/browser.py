@@ -5,12 +5,10 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 # profile_id -> {
 #   process: asyncio.subprocess.Process,
 #   started_at: datetime,
-#   task_id: str | None,
 #   log_file: file handle,
 #   log_path: str,
 #   state: 'running' | 'stopping',
@@ -55,7 +53,6 @@ def _close_log_file(inst: dict) -> None:
 def _record_exit(profile_id: str, inst: dict, returncode: int | None) -> None:
     recent_exits.append({
         "profile_id": profile_id,
-        "task_id": inst.get("task_id"),
         "started_at": inst["started_at"].isoformat(),
         "stopped_at": datetime.now(timezone.utc).isoformat(),
         "returncode": returncode,
@@ -92,7 +89,6 @@ def get_running_instances() -> dict:
         pid: {
             "profile_id": pid,
             "started_at": inst["started_at"].isoformat(),
-            "task_id": inst["task_id"],
             "state": inst.get("state", "running"),
         }
         for pid, inst in running_instances.items()
@@ -135,8 +131,7 @@ async def _watch(profile_id: str, process: asyncio.subprocess.Process) -> None:
 
 async def launch_profile(
     profile_dict: dict,
-    task_id: Optional[str],
-    urls: list[str],
+    bookmarks: list[dict],
 ) -> None:
     profile_id = profile_dict["id"]
 
@@ -155,7 +150,7 @@ async def launch_profile(
 
         payload = base64.b64encode(
             json.dumps(
-                {"profile": serializable_profile, "urls": urls, "license_key": license_key}
+                {"profile": serializable_profile, "bookmarks": bookmarks, "license_key": license_key}
             ).encode()
         ).decode()
 
@@ -196,7 +191,6 @@ async def launch_profile(
         inst = {
             "process": process,
             "started_at": datetime.now(timezone.utc),
-            "task_id": task_id,
             "log_file": log_file,
             "log_path": str(log_path),
             "state": "running",

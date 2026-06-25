@@ -2,13 +2,12 @@ import { Layout, Menu, Button, Popconfirm, Tooltip, Typography, theme, App as An
 import {
   PoweroffOutlined,
   AppstoreOutlined,
-  UnorderedListOutlined,
+  BookOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import ProfilesPage from "./pages/Profiles";
-import TasksPage from "./pages/Tasks";
-import TaskDetailPage from "./pages/Tasks/TaskDetail";
+import BookmarksPage from "./pages/Bookmarks";
 import SettingsPage from "./pages/Settings";
 import { shutdown } from "./api/system";
 
@@ -16,7 +15,7 @@ const { Sider, Content } = Layout;
 
 const NAV_ITEMS = [
   { key: "/", label: "Profile 管理", icon: <AppstoreOutlined /> },
-  { key: "/tasks", label: "URL 任务", icon: <UnorderedListOutlined /> },
+  { key: "/bookmarks", label: "书签", icon: <BookOutlined /> },
   { key: "/settings", label: "系统设置", icon: <SettingOutlined /> },
 ];
 
@@ -50,7 +49,7 @@ function AppLayout() {
   const location = useLocation();
   const { token } = theme.useToken();
   const { message } = AntdApp.useApp();
-  const selectedKey = location.pathname.startsWith("/tasks") ? "/tasks" : location.pathname;
+  const selectedKey = location.pathname.startsWith("/bookmarks") ? "/bookmarks" : location.pathname;
 
   async function handleShutdown() {
     try {
@@ -137,8 +136,7 @@ function AppLayout() {
           <div style={{ maxWidth: 1440, margin: "0 auto", padding: "24px 32px" }}>
             <Routes>
               <Route path="/" element={<ProfilesPage />} />
-              <Route path="/tasks" element={<TasksPage />} />
-              <Route path="/tasks/:id" element={<TaskDetailPage />} />
+              <Route path="/bookmarks" element={<BookmarksPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           </div>

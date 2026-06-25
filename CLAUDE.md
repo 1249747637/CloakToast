@@ -6,7 +6,7 @@
 
 ## 项目概述
 
-**CloakToast** 是一个多浏览器实例管理器，基于 `cloakbrowser`（封装 Playwright 的反指纹 Chromium）。用户可以创建多个带独立指纹/代理/流量策略的浏览器 Profile，按需启动/停止，并可以批量挂载 URL 任务让不同 Profile 依次打开指定网页。
+**CloakToast** 是一个多浏览器实例管理器，基于 `cloakbrowser`（封装 Playwright 的反指纹 Chromium）。用户可以创建多个带独立指纹/代理/流量策略的浏览器 Profile，按需启动/停止。所有 Profile 共用一套共享书签，启动时自动注入 Chromium 原生书签文件（`Default/Bookmarks`）。
 
 **技术栈**
 - Backend: Python + FastAPI + SQLAlchemy (SQLite) + uvicorn
@@ -23,13 +23,13 @@ CloakToast/
 ├── backend/
 │   ├── main.py              # FastAPI app + lifespan shutdown hook
 │   ├── database.py          # SQLite, SQLAlchemy engine, get_db + migrate_add_columns
-│   ├── models.py            # Profile, URLTask, TaskProfile ORM 模型
-│   ├── schemas.py           # Pydantic schemas (ProfileBase/Create/Update/Response…)
+│   ├── models.py            # Profile, Bookmark ORM 模型（URLTask/TaskProfile 保留但不使用）
+│   ├── schemas.py           # Pydantic schemas (ProfileBase/Create/Update/Response, BookmarkBase/Create/Update/Response…)
 │   ├── config.py            # data/config.json 读写, license key
 │   ├── routers/
 │   │   ├── profiles.py      # GET/POST/PUT/DELETE /api/profiles[/{id}[/duplicate]]
 │   │   ├── instances.py     # GET /api/instances, POST /launch, /stop/{id}, /recent_exits
-│   │   ├── tasks.py         # URL 任务 CRUD + 进度追踪
+│   │   ├── bookmarks.py     # GET/POST/PUT/DELETE /api/bookmarks[/{id}]
 │   │   └── system.py        # /info, /update (SSE), /license, /shutdown
 │   └── services/
 │       ├── browser.py       # 进程管理: launch_profile / stop_profile / watcher task
@@ -39,13 +39,13 @@ CloakToast/
 │   ├── src/
 │   │   ├── main.tsx         # 入口, ConfigProvider (Toasted Amber 主题), AntdApp
 │   │   ├── App.tsx          # 布局: Sider (logo+nav+icon) + Content (maxWidth 1440)
-│   │   ├── types.ts         # Profile, URLTask, URLTaskDetail, RunningInstance, SystemInfo
-│   │   ├── api/             # apiFetch wrapper + profiles/instances/tasks/system 模块
+│   │   ├── types.ts         # Profile, Bookmark, RunningInstance, SystemInfo
+│   │   ├── api/             # apiFetch wrapper + profiles/instances/bookmarks/system 模块
 │   │   ├── components/
 │   │   │   └── StatusBadge.tsx  # 绿 Tag "运行 12m" / 灰 Tag "已停止"
 │   │   └── pages/
 │   │       ├── Profiles/    # ProfileCard (自渲染 footer, 左色条) + ProfileForm + index
-│   │       ├── Tasks/       # 任务列表 + TaskDetail (进度表格)
+│   │       ├── Bookmarks/   # 共享书签 CRUD 表格
 │   │       └── Settings/    # License key + cloakbrowser 更新日志 (SSE)
 │   └── vite.config.ts       # dev proxy /api → 8765
 ├── tests/
@@ -53,7 +53,7 @@ CloakToast/
 │   ├── test_profiles.py
 │   ├── test_instances.py    # mock + 真实进程逻辑测试 (WebRTC/relay/资源拦截)
 │   ├── test_chain_proxy.py  # SOCKS5 协议握手 + 服务器启停测试
-│   ├── test_tasks.py
+│   ├── test_bookmarks.py    # Bookmark CRUD + _write_bookmarks 书签文件生成
 │   ├── test_system.py
 │   └── test_worker_e2e.py   # 真实 Chromium E2E (需 CLOAKTOAST_E2E=1)
 ├── data/                    # 运行时数据 (gitignored)
@@ -72,8 +72,11 @@ CloakToast/
 ## 快速启动
 
 ```bash
-# 生产模式 (Windows)
+# 生产模式 (Windows) — 双击或命令行执行
 start.bat
+# 流程：pip install → 杀占用 8765 的进程 → npm build
+#       → Start-Process python (隐藏窗口后台运行)
+#       → 等待 localhost:8765 就绪 → 打开浏览器 → bat 窗口自动关闭
 
 # 开发模式
 # Terminal 1 — backend (热重载)
@@ -122,10 +125,20 @@ pip install "cloakbrowser[geoip]"
 
 > **数据库迁移**: 新列由 `database.py:migrate_add_columns()` 幂等追加，在 `main.py` 的 `Base.metadata.create_all()` 之后调用，不阻断启动。
 
-### URLTask / TaskProfile
+### Bookmark (`backend/models.py`, `backend/schemas.py`)
 
-- `URLTask`: 一组 URL（name + urls[] + notes）
-- `TaskProfile`: 多对多关联，记录每个 Profile 对此任务的进度 (`pending`/`done`/`skipped`)
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | String (UUID) | 主键 |
+| name | String | 书签显示名称 |
+| url | String | 书签 URL |
+| notes | String | 备注（可选） |
+| sort_order | Integer | 排序权重（升序），同值按 created_at 升序 |
+| created_at | DateTime | 创建时间 |
+
+所有 Profile 共用一套书签。启动时 worker 将全部书签写入 `{udd}/Default/Bookmarks`（Chromium 原生格式），浏览器书签栏即时生效。
+
+> URLTask / TaskProfile 表保留在数据库中（向后兼容），但不再使用。
 
 ---
 
@@ -147,7 +160,7 @@ uvicorn (FastAPI)
 
 1. **`wait_for_event("close", timeout=0)`** — 必须 `timeout=0`，否则 Playwright 默认 30s 超时会强杀浏览器。
 
-2. **close listener 必须在 goto loop 之前订阅** — pyee 不重放历史事件，若 goto 期间用户关浏览器，close 已触发，`wait_for_event` 后注册永远挂死。因此用 `threading.Event` + `context.on("close", ...)` 在 goto 之前订阅。
+2. **close listener 必须在打开页面之前订阅** — pyee 不重放历史事件，若打开页面期间用户关浏览器，close 已触发，`wait_for_event` 后注册永远挂死。因此用 `threading.Event` + `context.on("close", ...)` 在 `new_page()` 之前订阅。
 
 3. **per-profile asyncio.Lock** — 防 TOCTOU：并发两个 launch 请求同一 profile 会撞 Chromium SingletonLock。
 
@@ -175,16 +188,12 @@ uvicorn (FastAPI)
 | POST | `/api/profiles/{id}/duplicate` | 克隆（加" 副本"后缀） |
 | GET | `/api/instances` | 运行中的进程列表 |
 | GET | `/api/instances/recent_exits` | 最近退出记录（含 returncode） |
-| POST | `/api/instances/launch` | 启动 `{profile_id, task_id?}` |
+| POST | `/api/instances/launch` | 启动 `{profile_id}` |
 | POST | `/api/instances/stop/{id}` | 停止 |
-| GET | `/api/tasks` | 任务列表 |
-| GET | `/api/tasks/{id}` | 任务详情（含 Profile 进度） |
-| POST | `/api/tasks` | 创建任务 |
-| PUT | `/api/tasks/{id}` | 更新任务 |
-| DELETE | `/api/tasks/{id}` | 删除任务 |
-| POST | `/api/tasks/{id}/profiles` | 关联 profiles `{profile_ids[]}` |
-| DELETE | `/api/tasks/{id}/profiles/{pid}` | 移出 profile |
-| PATCH | `/api/tasks/{id}/profiles/{pid}/status` | 更新进度 `{status, notes}` |
+| GET | `/api/bookmarks` | 书签列表（按 sort_order, created_at） |
+| POST | `/api/bookmarks` | 创建书签 |
+| PUT | `/api/bookmarks/{id}` | 更新书签 |
+| DELETE | `/api/bookmarks/{id}` | 删除书签 |
 | GET | `/api/system/info` | 版本 + license |
 | PUT | `/api/system/license` | 保存 license key |
 | POST | `/api/system/update` | 更新 cloakbrowser（SSE 流） |
@@ -211,8 +220,7 @@ uvicorn (FastAPI)
         └── 高级: UA / 品牌 Select→版本 Select(联动) / 平台版本 Select/Input(联动)
                   扩展路径 / UDD / CDP / extra_args
 
-/tasks → Tasks/index.tsx
-/tasks/:id → Tasks/TaskDetail.tsx
+/bookmarks → Bookmarks/index.tsx  # 共享书签 CRUD 表格
 
 /settings → Settings/index.tsx
 ```
@@ -233,12 +241,11 @@ uvicorn (FastAPI)
 |------|------|------|
 | 单元 | `test_instances.py` | mock subprocess，覆盖 launch/stop/watcher/TOCTOU/资源拦截/WebRTC模式/relay URL |
 | 单元 | `test_chain_proxy.py` | SOCKS5协议握手(_parse/_socks5_accept/_socks5_reply) + 服务器启停集成 |
-| 集成 | `test_profiles.py` / `test_tasks.py` / `test_system.py` | 真实 SQLite in-memory DB + TestClient |
+| 集成 | `test_bookmarks.py` / `test_profiles.py` / `test_system.py` | 真实 SQLite in-memory DB + TestClient |
 | E2E | `test_worker_e2e.py` | 真实 Chromium，需 `CLOAKTOAST_E2E=1`，~50s |
 
 E2E 测试覆盖：
 - 30s 存活回归（验证 `timeout=0` 修复）
-- close-during-goto 不挂死（验证 close listener 前置）
 - lifespan shutdown 不留 orphan
 - block_video 真实 abort `.mp4` 请求
 - 完整 API launch → 存活 5s → stop
@@ -247,7 +254,7 @@ E2E 测试覆盖：
 
 ## 已知限制 / 待做
 
-- **argv 32KB 限制** (Windows): profile payload 通过 base64 argv 传给 worker，极端情况（超长 notes + 大量 URLs + 多扩展路径）可能超出 CreateProcessW 32767 字符限制。长期应改为 stdin 传输。
+- **argv 32KB 限制** (Windows): profile payload（含书签列表）通过 base64 argv 传给 worker，书签数量极多时可能超出 CreateProcessW 32767 字符限制。长期应改为 stdin 传输。
 - **secrets 暴露在 argv**: license_key / proxy_pass 在 base64 payload 里，系统上同用户进程可读。临时缓解：license_key 同时走 env var；长期应改 stdin。
 - **running_instances 跨重启丢失**: backend 重启后 in-memory dict 清空，但 Chromium 仍在运行，持有 SingletonLock，导致重启后无法再次 launch 同一 profile（需手动关闭浏览器或删除 SingletonLock 文件）。长期应持久化 `{profile_id: pid}` 到 SQLite 并在 startup 用 psutil 检测。
 - **前端无搜索/过滤**: Profile 管理页无搜索、无运行状态过滤。

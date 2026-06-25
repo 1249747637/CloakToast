@@ -11,8 +11,10 @@
 import sys
 import json
 import base64
+import hashlib
 import threading
 import traceback
+import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -173,6 +175,69 @@ def install_resource_blocker(
         return False
 
 
+def _write_bookmarks(udd: str, bookmarks: list[dict]) -> None:
+    """将共享书签写入 Chromium 的 Default/Bookmarks 文件。"""
+    import time as _time
+
+    def _cr_time():
+        return str(int((_time.time() + 11644473600) * 1_000_000))
+
+    t = _cr_time()
+    children = []
+    for i, bm in enumerate(bookmarks, start=4):
+        children.append({
+            "date_added": t, "date_last_used": "0",
+            "guid": str(uuid.uuid4()), "id": str(i),
+            "name": bm["name"], "type": "url", "url": bm["url"],
+        })
+
+    roots = {
+        "bookmark_bar": {
+            "children": children,
+            "date_added": t, "date_last_used": "0", "date_modified": t,
+            "guid": "0bc5d13f-2cba-48a8-9788-d21b4db8f192",
+            "id": "1", "name": "Bookmarks bar", "type": "folder",
+        },
+        "other": {
+            "children": [],
+            "date_added": t, "date_last_used": "0", "date_modified": "0",
+            "guid": "82e3080f-f0b8-4a86-875c-b77e53e84082",
+            "id": "2", "name": "Other bookmarks", "type": "folder",
+        },
+        "synced": {
+            "children": [],
+            "date_added": t, "date_last_used": "0", "date_modified": "0",
+            "guid": "4cf2e351-0e85-532b-bb37-df045d8f8d0f",
+            "id": "3", "name": "Mobile bookmarks", "type": "folder",
+        },
+    }
+
+    def _checksum(r):
+        md5 = hashlib.md5()
+
+        def walk(node):
+            if node["type"] == "url":
+                md5.update(node["name"].encode())
+                md5.update(node["id"].encode())
+                md5.update(node["url"].encode())
+            else:
+                md5.update(node["name"].encode())
+                md5.update(node["id"].encode())
+                for c in node.get("children", []):
+                    walk(c)
+
+        for k in ("bookmark_bar", "other", "synced"):
+            walk(r[k])
+        return md5.hexdigest()
+
+    data = {"checksum": _checksum(roots), "roots": roots, "version": 1}
+    default_dir = Path(udd) / "Default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    (default_dir / "Bookmarks").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def build_proxy(profile: dict) -> str | None:
     if profile.get("proxy_type", "none") == "none" or not profile.get("proxy_host"):
         return None
@@ -205,11 +270,11 @@ def main() -> int:
         return 1
 
     profile = payload.get("profile") or {}
-    urls = payload.get("urls") or []
+    bookmarks = payload.get("bookmarks") or []
     license_key = payload.get("license_key")
     udd = profile.get("udd")
 
-    _log(udd, f"worker started, profile={profile.get('id')!r}, urls={len(urls)}, license={'set' if license_key else 'none'}")
+    _log(udd, f"worker started, profile={profile.get('id')!r}, bookmarks={len(bookmarks)}, license={'set' if license_key else 'none'}")
 
     try:
         from cloakbrowser import launch_persistent_context
@@ -233,6 +298,12 @@ def main() -> int:
             _log(udd, f"WARN: chain proxy failed to start: {e!r} — using direct proxy")
 
     proxy_for_browser = f"socks5://127.0.0.1:{chain_port}" if chain_port else build_proxy(profile)
+
+    try:
+        _write_bookmarks(udd, bookmarks)
+        _log(udd, f"bookmarks written: {len(bookmarks)} items")
+    except Exception as e:
+        _log(udd, f"WARN: failed to write bookmarks: {e!r}")
 
     try:
         context = launch_persistent_context(
@@ -289,25 +360,12 @@ def main() -> int:
         _log(udd, "WARN: failed to register close listener\n" + traceback.format_exc())
 
     try:
-        for url in urls:
-            if closed_event.is_set() or context.is_closed():
-                _log(udd, "context closed during goto loop, breaking early")
-                break
-            try:
-                page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            except Exception as e:
-                # 单个 URL 失败不应导致整个浏览器闪退 — 仅记录后继续
-                _log(udd, f"goto {url!r} failed: {e!r}")
-
-        # 没有任何 URL 时新开一个空白页，避免无页面导致 Chromium 启动后立刻退出
         if not context.is_closed() and not context.pages:
             try:
                 context.new_page()
             except Exception as e:
                 _log(udd, f"new_page (blank) failed: {e!r}")
 
-        # 走 wait loop 之前再检查一次：如果 goto 期间已关闭，直接走完即可
         if closed_event.is_set() or context.is_closed():
             _log(udd, "already closed before wait loop, exiting")
             return 0

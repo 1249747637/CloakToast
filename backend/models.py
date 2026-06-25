@@ -94,3 +94,14 @@ class TaskProfile(Base):
     status = Column(String, default="pending")  # pending/done/skipped
     notes = Column(Text, default="")
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class Bookmark(Base):
+    __tablename__ = "bookmarks"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    notes = Column(Text, default="")
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

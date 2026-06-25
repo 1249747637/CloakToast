@@ -73,57 +73,30 @@ class ProfileResponse(ProfileBase):
     model_config = {"from_attributes": True}
 
 
-class URLTaskBase(BaseModel):
+class BookmarkBase(BaseModel):
     name: str
-    urls: list[str] = []
+    url: str
     notes: str = ""
+    sort_order: int = 0
 
 
-class URLTaskCreate(URLTaskBase):
+class BookmarkCreate(BookmarkBase):
     pass
 
 
-class URLTaskUpdate(URLTaskBase):
+class BookmarkUpdate(BookmarkBase):
     pass
 
 
-class URLTaskResponse(URLTaskBase):
+class BookmarkResponse(BookmarkBase):
     id: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-class TaskProfileResponse(BaseModel):
-    id: str
-    task_id: str
-    profile_id: str
-    status: str
-    notes: str
-    updated_at: datetime
-    profile: Optional[ProfileResponse] = None
-
-    model_config = {"from_attributes": True}
-
-
-class URLTaskDetail(URLTaskResponse):
-    profiles: list[TaskProfileResponse] = []
-    total_profiles: int = 0
-    done_count: int = 0
-
-
-class AddProfilesRequest(BaseModel):
-    profile_ids: list[str]
-
-
-class UpdateStatusRequest(BaseModel):
-    status: str  # pending/done/skipped
-    notes: str = ""
-
-
 class LaunchRequest(BaseModel):
     profile_id: str
-    task_id: Optional[str] = None
 
 
 class SystemInfo(BaseModel):

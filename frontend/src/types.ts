@@ -51,34 +51,18 @@ export interface Profile {
   running_since: string | null;
 }
 
-export interface URLTask {
+export interface Bookmark {
   id: string;
   name: string;
-  urls: string[];
+  url: string;
   notes: string;
+  sort_order: number;
   created_at: string;
-}
-
-export interface TaskProfileEntry {
-  id: string;
-  task_id: string;
-  profile_id: string;
-  status: "pending" | "done" | "skipped";
-  notes: string;
-  updated_at: string;
-  profile: Profile | null;
-}
-
-export interface URLTaskDetail extends URLTask {
-  profiles: TaskProfileEntry[];
-  total_profiles: number;
-  done_count: number;
 }
 
 export interface RunningInstance {
   profile_id: string;
   started_at: string;
-  task_id: string | null;
 }
 
 export interface SystemInfo {

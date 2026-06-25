@@ -26,10 +26,17 @@ if errorlevel 1 (
 cd ..
 
 echo [4/4] Starting CloakToast...
-start "" /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:8765"
-python -m backend.main
-if errorlevel 1 (
-    echo.
-    echo Server exited with an error. Press any key to close.
+for /f "delims=" %%p in ('where python 2^>nul') do if not defined PYTHON_EXE set "PYTHON_EXE=%%p"
+if not defined PYTHON_EXE (
+    echo ERROR: python not found in PATH.
     pause
+    exit /b 1
 )
+
+powershell -NoProfile -NonInteractive -Command "Start-Process -FilePath '%PYTHON_EXE%' -ArgumentList '-m','backend.main' -WorkingDirectory '%~dp0' -WindowStyle Hidden"
+
+powershell -NoProfile -NonInteractive -Command "$u='http://localhost:8765';for($i=0;$i-lt30;$i++){try{(New-Object Net.WebClient).DownloadString($u)|Out-Null;break}catch{Start-Sleep 1}};Start-Process $u"
+
+echo CloakToast started. This window will close.
+timeout /t 2 /nobreak >nul
+exit /b 0

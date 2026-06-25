@@ -23,11 +23,11 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="CloakToast", lifespan=lifespan)
 
-from .routers import profiles, instances, tasks, system
+from .routers import profiles, instances, bookmarks, system
 
 app.include_router(profiles.router, prefix="/api/profiles", tags=["profiles"])
 app.include_router(instances.router, prefix="/api/instances", tags=["instances"])
-app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(bookmarks.router, prefix="/api/bookmarks", tags=["bookmarks"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 
 DIST = Path(__file__).parent.parent / "frontend" / "dist"

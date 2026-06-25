@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import Profile
+from ..models import Profile, Bookmark
 from ..schemas import LaunchRequest
 from ..services import browser
 
@@ -27,16 +27,12 @@ async def launch(body: LaunchRequest, db: Session = Depends(get_db)):
     if browser.is_running(body.profile_id):
         raise HTTPException(400, "Already running")
 
-    task_urls: list[str] = []
-    if body.task_id:
-        from ..models import URLTask
-        task = db.get(URLTask, body.task_id)
-        if task:
-            task_urls = task.urls or []
+    bookmarks = db.query(Bookmark).order_by(Bookmark.sort_order, Bookmark.created_at).all()
+    bookmark_list = [{"name": b.name, "url": b.url} for b in bookmarks]
 
     profile_dict = {c.name: getattr(p, c.name) for c in p.__table__.columns}
     try:
-        await browser.launch_profile(profile_dict, body.task_id, task_urls)
+        await browser.launch_profile(profile_dict, bookmark_list)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}

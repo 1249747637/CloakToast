@@ -46,6 +46,16 @@ def migrate_add_columns(eng=None) -> None:
                     conn.execute(
                         text(f"ALTER TABLE profiles ADD COLUMN {col_name} {col_def}")
                     )
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS bookmarks (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    notes TEXT DEFAULT '',
+                    sort_order INTEGER DEFAULT 0,
+                    created_at DATETIME
+                )
+            """))
             conn.commit()
     except Exception as exc:
         import logging
