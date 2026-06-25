@@ -189,6 +189,7 @@ export default function ProfileForm({ open, profile, onClose }: Props) {
                   key: "relay",
                   label: "中继代理（链式，可选）",
                   children: relayPanelChildren,
+                  forceRender: true,
                 }]}
               />
             </>
