@@ -1,5 +1,7 @@
 # CloakToast
 
+[English](README_EN.md) | 中文
+
 多浏览器实例管理器，基于 [cloakbrowser](https://pypi.org/project/cloakbrowser/)（封装 Playwright 的反指纹 Chromium）。创建多个带独立指纹、代理、流量策略的浏览器 Profile，按需启动/停止，所有 Profile 共享同一套书签。
 
 ## 功能特性
